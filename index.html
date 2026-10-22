@@ -167,6 +167,8 @@ html[data-mode=dark] .veil{background:rgba(0,0,0,.5)}
 <script>
 'use strict';
 /* ============ хранилище ============ */
+const APP_VERSION = '2.1'; // меняйте вместе с VERSION в sw.js
+const APP_DATE = '22.10.2026';
 const KEY = 'ritm_v1';
 const MEALS = [['breakfast','Завтрак'],['lunch','Обед'],['dinner','Ужин'],['snack','Перекус']];
 const THEMES = {pink:'#e48aa3',blue:'#79a6d8',green:'#7bb586',yellow:'#d6ae42',lilac:'#a68bd6'};
@@ -704,7 +706,9 @@ function viewMore(){
    <p class="small muted" style="margin:10px 4px 12px">${g.last?'Последняя копия: '+new Date(g.last).toLocaleString('ru-RU',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}):'Копий пока не было.'}</p>
    <label class="field"><span>Пароль шифрования (по желанию — запишите его!)</span><input class="inp" id="bkp" type="password" value="${esc(g.pass)}" autocapitalize="off" autocorrect="off" placeholder="без пароля копия не шифруется"></label>
    <label class="btn soft wide center" style="display:block">Восстановить из копии<input type="file" id="imp" accept=".json,application/json" hidden></label></div>`;
-  h+=`<p class="center small muted">Ритм · данные хранятся только на этом телефоне</p>`;
+  h+=`<div class="card"><h2>Версия приложения</h2><div class="row between"><div><b style="font-size:20px">${APP_VERSION}</b> <span class="small muted">от ${APP_DATE}</span></div><button class="btn soft" data-act="checkupd" style="padding:9px 12px">Проверить обновления</button></div>
+   <p class="small muted" style="margin:10px 4px 0">Новая версия: рецепты, план тренировок, самочувствие, итоги месяца, тёмная тема.</p></div>`;
+  h+=`<p class="center small muted">Ритм ${APP_VERSION} · данные хранятся только на этом телефоне</p>`;
   return h;
 }
 
@@ -773,6 +777,21 @@ async function shareBackup(){
   } else { const a=document.createElement('a'); a.href=URL.createObjectURL(file); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000); done(); }
 }
 
+async function checkUpdate(){
+  if(!navigator.onLine){ toast('Нет интернета'); return; }
+  toast('Проверяю…');
+  try{
+    const txt=await (await fetch('index.html?check='+Date.now(),{cache:'no-store'})).text();
+    const m=txt.match(/APP_VERSION = '([^']+)'/), v=m?m[1]:null;
+    if(!v){ toast('Не удалось узнать версию на сервере'); return; }
+    if(v===APP_VERSION){ toast('У вас последняя версия '+v); return; }
+    if(!confirm('Есть новая версия '+v+' (у вас '+APP_VERSION+'). Обновить сейчас? Ваши записи сохранятся.')) return;
+    save(false);
+    if('serviceWorker' in navigator){ const rs=await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(r=>r.update().catch(()=>{}))); }
+    if(window.caches){ const ks=await caches.keys(); await Promise.all(ks.map(k=>caches.delete(k))); }
+    location.reload();
+  }catch(e){ toast('Не получилось проверить: '+e.message); }
+}
 function icsText(){
   const pad=n=>String(n).padStart(2,'0'), BY=['MO','TU','WE','TH','FR','SA','SU'], t=today();
   const stamp=new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d+/,'');
@@ -855,7 +874,7 @@ document.addEventListener('click',e=>{
     goplan(){ tab='more'; render(); setTimeout(()=>$('#plancard')?.scrollIntoView({behavior:'smooth',block:'start'}),50); },
     slotadd(){ S.plan.slots.push({id:uid(),wd:wdOf(today()),type:S.workoutTypes[0]||'Тренировка',time:'19:00',minutes:60}); save(); render(); },
     slotdel(){ S.plan.slots.splice(+d.i,1); save(); render(); },
-    ics: exportIcs,
+    ics: exportIcs, checkupd: checkUpdate,
     smon(){ const [y,m]=statMonth.split('-').map(Number); statMonth=iso(new Date(y,m-1+(+d.n),1)).slice(0,7); render(); },
     mode(){ S.settings.mode=d.k; save(false); render(); },
     export(){ shareBackup(); }
@@ -877,7 +896,7 @@ document.addEventListener('change',e=>{
 /* ============ старт ============ */
 render(); lockIfNeeded();
 try{ matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{ if(S.settings.mode==='auto') render(); }); }catch(e){}
-if('serviceWorker' in navigator && location.protocol==='https:') navigator.serviceWorker.register('sw.js').catch(()=>{});
+if('serviceWorker' in navigator && window.isSecureContext && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
 </body>
 </html>
