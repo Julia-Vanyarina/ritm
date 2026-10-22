@@ -38,7 +38,7 @@ def find_backup() -> Path:
     found = []
     # сначала папка «Ритм» на Диске и Загрузки — быстро
     for root in roots:
-        for base in (root / "Ритм", root):
+        for base in (root / "Ритм", root / "Приложения" / "Ритм", root / "Applications" / "Ритм", root):
             if base.is_dir():
                 found += [p for p in base.glob("ritm-backup*.json")]
     # не нашли — ищем по всему Диску
@@ -77,6 +77,9 @@ DROP TABLE IF EXISTS water;
 DROP TABLE IF EXISTS products;
 DROP TABLE IF EXISTS profile;
 DROP TABLE IF EXISTS info;
+DROP TABLE IF EXISTS days;
+DROP TABLE IF EXISTS recipe_items;
+DROP TABLE IF EXISTS plan;
 
 CREATE TABLE food (           -- дневник еды: одна строка = одна запись
   date TEXT, meal TEXT, name TEXT, amount REAL, unit TEXT,
@@ -91,6 +94,12 @@ CREATE TABLE products (       -- мои продукты и блюда; знач
   favorite INTEGER, times_used INTEGER);
 CREATE TABLE profile (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE info (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE days (           -- самочувствие: сон в часах, энергия и настроение 1…5, месячные 0/1, заметка
+  date TEXT PRIMARY KEY, sleep_hours REAL, energy INTEGER, mood INTEGER, period INTEGER, note TEXT);
+CREATE TABLE recipe_items (   -- состав рецептов
+  recipe TEXT, ingredient TEXT, amount REAL, unit TEXT, kcal REAL, protein REAL, fat REAL, carbs REAL);
+CREATE TABLE plan (           -- расписание тренировок
+  weekday TEXT, type TEXT, time TEXT, minutes REAL);
 
 CREATE VIEW daily_totals AS   -- итоги по дням
 SELECT d.date,
@@ -99,10 +108,12 @@ SELECT d.date,
        ROUND(COALESCE(SUM(f.fat),0),1) AS fat,
        ROUND(COALESCE(SUM(f.carbs),0),1) AS carbs,
        w.liters AS water_liters,
-       (SELECT SUM(minutes) FROM workouts t WHERE t.date = d.date) AS workout_minutes
-FROM (SELECT date FROM food UNION SELECT date FROM water UNION SELECT date FROM workouts) d
+       (SELECT SUM(minutes) FROM workouts t WHERE t.date = d.date) AS workout_minutes,
+       s.sleep_hours, s.energy, s.mood
+FROM (SELECT date FROM food UNION SELECT date FROM water UNION SELECT date FROM workouts UNION SELECT date FROM days) d
 LEFT JOIN food f ON f.date = d.date
 LEFT JOIN water w ON w.date = d.date
+LEFT JOIN days s ON s.date = d.date
 GROUP BY d.date ORDER BY d.date;
 
 CREATE VIEW weekly_weight AS  -- средний вес по неделям (понедельник — начало недели)
@@ -134,6 +145,20 @@ def build(data: dict, source: Path) -> dict:
                           "порция" if x.get("per") == "pc" else "100 г",
                           x.get("kcal"), x.get("p"), x.get("f"), x.get("c"), int(bool(x.get("fav"))), x.get("uses", 0))
                          for x in data.get("library", [])])
+        con.executemany("INSERT INTO days VALUES (?,?,?,?,?,?)",
+                        [(d, r.get("sleep"), r.get("energy"), r.get("mood"), int(bool(r.get("period"))), r.get("note"))
+                         for d, r in sorted(data.get("days", {}).items()) if r])
+        ri = []
+        for x in data.get("library", []):
+            for g in (x.get("recipe") or {}).get("items", []):
+                k = g.get("qty", 0) if g.get("per") == "pc" else g.get("qty", 0) / 100
+                ri.append((x.get("name"), g.get("name"), g.get("qty"), "порц." if g.get("per") == "pc" else "г",
+                           round(g.get("kcal", 0) * k, 1), round(g.get("p", 0) * k, 1), round(g.get("f", 0) * k, 1), round(g.get("c", 0) * k, 1)))
+        con.executemany("INSERT INTO recipe_items VALUES (?,?,?,?,?,?,?,?)", ri)
+        wd = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+        con.executemany("INSERT INTO plan VALUES (?,?,?,?)",
+                        [(wd[int(s.get("wd", 0))], s.get("type"), s.get("time"), s.get("minutes"))
+                         for s in (data.get("plan") or {}).get("slots", [])])
         con.executemany("INSERT INTO profile VALUES (?,?)",
                         [(k, str(v)) for k, v in data.get("profile", {}).items() if v not in ("", None)])
         con.executemany("INSERT INTO info VALUES (?,?)", [
