@@ -167,7 +167,7 @@ html[data-mode=dark] .veil{background:rgba(0,0,0,.5)}
 <script>
 'use strict';
 /* ============ хранилище ============ */
-const APP_VERSION = '2.1'; // меняйте вместе с VERSION в sw.js
+const APP_VERSION = '2.2'; // меняйте вместе с VERSION в sw.js
 const APP_DATE = '22.10.2026';
 const KEY = 'ritm_v1';
 const MEALS = [['breakfast','Завтрак'],['lunch','Обед'],['dinner','Ужин'],['snack','Перекус']];
@@ -370,23 +370,37 @@ function offToItem(p){
   return {name:(p.product_name_ru||p.product_name||'Без названия').trim(), brand:(p.brands||'').split(',')[0].trim(), code:p.code||'',
     per:100, kcal:num(kcal), p:num(n.proteins_100g), f:num(n.fat_100g), c:num(n.carbohydrates_100g), portion:num(p.serving_quantity)||100};
 }
+function fetchT(url,ms){ const c=new AbortController(), t=setTimeout(()=>c.abort(),ms); return fetch(url,{signal:c.signal}).finally(()=>clearTimeout(t)); }
+const OFF_FIELDS='code,product_name,product_name_ru,brands,nutriments,serving_quantity';
+async function offSearchNew(q){ // новый поисковик Open Food Facts (Search-a-licious)
+  const r=await fetchT(`https://search.openfoodfacts.org/search?q=${encodeURIComponent(q)}&langs=ru,en&page_size=25&fields=${OFF_FIELDS}`,12000);
+  if(!r.ok) throw new Error('new '+r.status);
+  const j=await r.json(); const list=(j.hits||[]).map(p=>offToItem({...p,brands:Array.isArray(p.brands)?p.brands.join(','):p.brands})).filter(x=>x.kcal>0);
+  if(!list.length && (j.hits||[]).length) throw new Error('no nutriments'); // нет калорий в ответе — пробуем старый поиск
+  return list;
+}
+async function offSearchOld(q){ // старый поиск
+  const r=await fetchT(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=25&lc=ru&fields=${OFF_FIELDS}`,20000);
+  if(r.status===429) throw new Error('limit');
+  if(!r.ok) throw new Error('old '+r.status);
+  return ((await r.json()).products||[]).map(offToItem).filter(x=>x.kcal>0);
+}
 async function searchOFF(q){
   q=q.trim(); if(!q) return;
   if(!navigator.onLine){ toast('Нет интернета — поиск по базе недоступен'); return; }
-  const box=sheetEl.querySelector('#results'); const btn=box.querySelector('[data-act=off]'); if(btn){ btn.textContent='Ищу…'; btn.disabled=true; }
-  try{
-    const url=`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=25&lc=ru&fields=code,product_name,product_name_ru,brands,nutriments,serving_quantity`;
-    const r=await fetch(url); const j=await r.json();
-    offResults=(j.products||[]).map(offToItem).filter(x=>x.kcal>0);
-    if(!offResults.length) toast('В базе ничего не нашлось — добавьте вручную');
-  }catch(e){ toast('База продуктов не ответила, попробуйте ещё раз'); }
-  renderResults(q,true);
+  const box=sheetEl.querySelector('#results'); const btn=box.querySelector('[data-act=off]'); if(btn){ btn.textContent='Ищу в Open Food Facts…'; btn.disabled=true; }
+  let ok=false;
+  try{ offResults=await offSearchNew(q); ok=true; }catch(e){}
+  if(!ok){ try{ offResults=await offSearchOld(q); ok=true; }catch(e){ offResults=[];
+      toast(e.message==='limit'?'База просит подождать минуту: не больше 10 поисков в минуту':'База продуктов не отвечает. Попробуйте позже, отсканируйте штрихкод или добавьте вручную'); } }
+  if(ok && !offResults.length) toast('В базе такого нет — отсканируйте штрихкод или добавьте с упаковки вручную');
+  if(sheetEl) renderResults(q,true);
 }
 async function lookupBarcode(code){
   toast('Ищу продукт…');
   const local=S.library.find(x=>x.code===code); if(local){ choose({...local}); return; }
   try{
-    const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=code,product_name,product_name_ru,brands,nutriments,serving_quantity`);
+    const r=await fetchT(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=code,product_name,product_name_ru,brands,nutriments,serving_quantity`,15000);
     const j=await r.json();
     if(j.status===1 && j.product){ const it=offToItem(j.product); it.code=code; choose(it); }
     else { toast('Этого штрихкода нет в базе — заполните вручную'); openManual({code}); }
@@ -707,7 +721,7 @@ function viewMore(){
    <label class="field"><span>Пароль шифрования (по желанию — запишите его!)</span><input class="inp" id="bkp" type="password" value="${esc(g.pass)}" autocapitalize="off" autocorrect="off" placeholder="без пароля копия не шифруется"></label>
    <label class="btn soft wide center" style="display:block">Восстановить из копии<input type="file" id="imp" accept=".json,application/json" hidden></label></div>`;
   h+=`<div class="card"><h2>Версия приложения</h2><div class="row between"><div><b style="font-size:20px">${APP_VERSION}</b> <span class="small muted">от ${APP_DATE}</span></div><button class="btn soft" data-act="checkupd" style="padding:9px 12px">Проверить обновления</button></div>
-   <p class="small muted" style="margin:10px 4px 0">Новая версия: рецепты, план тренировок, самочувствие, итоги месяца, тёмная тема.</p></div>`;
+   <p class="small muted" style="margin:10px 4px 0">Что нового в 2.2: поиск продуктов через новый поисковик Open Food Facts.</p></div>`;
   h+=`<p class="center small muted">Ритм ${APP_VERSION} · данные хранятся только на этом телефоне</p>`;
   return h;
 }
