@@ -1,5 +1,5 @@
 // Ритм — офлайн-режим. При обновлении приложения поменяйте номер версии (и APP_VERSION в index.html).
-const VERSION = 'ritm-v4';
+const VERSION = 'ritm-v5';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {

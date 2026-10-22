@@ -167,7 +167,7 @@ html[data-mode=dark] .veil{background:rgba(0,0,0,.5)}
 <script>
 'use strict';
 /* ============ хранилище ============ */
-const APP_VERSION = '2.2'; // меняйте вместе с VERSION в sw.js
+const APP_VERSION = '2.3'; // меняйте вместе с VERSION в sw.js
 const APP_DATE = '22.10.2026';
 const KEY = 'ritm_v1';
 const MEALS = [['breakfast','Завтрак'],['lunch','Обед'],['dinner','Ужин'],['snack','Перекус']];
@@ -370,6 +370,7 @@ function offToItem(p){
   return {name:(p.product_name_ru||p.product_name||'Без названия').trim(), brand:(p.brands||'').split(',')[0].trim(), code:p.code||'',
     per:100, kcal:num(kcal), p:num(n.proteins_100g), f:num(n.fat_100g), c:num(n.carbohydrates_100g), portion:num(p.serving_quantity)||100};
 }
+const diagLog=[]; function logErr(where,e){ diagLog.push(new Date().toLocaleTimeString('ru-RU')+' '+where+': '+(e&&(e.name+' '+e.message)||e)); if(diagLog.length>20) diagLog.shift(); }
 function fetchT(url,ms){ const c=new AbortController(), t=setTimeout(()=>c.abort(),ms); return fetch(url,{signal:c.signal}).finally(()=>clearTimeout(t)); }
 const OFF_FIELDS='code,product_name,product_name_ru,brands,nutriments,serving_quantity';
 async function offSearchNew(q){ // новый поисковик Open Food Facts (Search-a-licious)
@@ -390,8 +391,8 @@ async function searchOFF(q){
   if(!navigator.onLine){ toast('Нет интернета — поиск по базе недоступен'); return; }
   const box=sheetEl.querySelector('#results'); const btn=box.querySelector('[data-act=off]'); if(btn){ btn.textContent='Ищу в Open Food Facts…'; btn.disabled=true; }
   let ok=false;
-  try{ offResults=await offSearchNew(q); ok=true; }catch(e){}
-  if(!ok){ try{ offResults=await offSearchOld(q); ok=true; }catch(e){ offResults=[];
+  try{ offResults=await offSearchNew(q); ok=true; }catch(e){ logErr('новый поиск',e); }
+  if(!ok){ try{ offResults=await offSearchOld(q); ok=true; }catch(e){ logErr('старый поиск',e); offResults=[];
       toast(e.message==='limit'?'База просит подождать минуту: не больше 10 поисков в минуту':'База продуктов не отвечает. Попробуйте позже, отсканируйте штрихкод или добавьте вручную'); } }
   if(ok && !offResults.length) toast('В базе такого нет — отсканируйте штрихкод или добавьте с упаковки вручную');
   if(sheetEl) renderResults(q,true);
@@ -720,8 +721,9 @@ function viewMore(){
    <p class="small muted" style="margin:10px 4px 12px">${g.last?'Последняя копия: '+new Date(g.last).toLocaleString('ru-RU',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}):'Копий пока не было.'}</p>
    <label class="field"><span>Пароль шифрования (по желанию — запишите его!)</span><input class="inp" id="bkp" type="password" value="${esc(g.pass)}" autocapitalize="off" autocorrect="off" placeholder="без пароля копия не шифруется"></label>
    <label class="btn soft wide center" style="display:block">Восстановить из копии<input type="file" id="imp" accept=".json,application/json" hidden></label></div>`;
+  h+=`<div class="card"><h2>Проверка связи с базой продуктов</h2><p class="small muted" style="margin:0 0 10px">Если поиск продуктов не работает — нажмите, дождитесь результата и пришлите его.</p><button class="btn soft wide" data-act="diag">Проверить связь</button></div>`;
   h+=`<div class="card"><h2>Версия приложения</h2><div class="row between"><div><b style="font-size:20px">${APP_VERSION}</b> <span class="small muted">от ${APP_DATE}</span></div><button class="btn soft" data-act="checkupd" style="padding:9px 12px">Проверить обновления</button></div>
-   <p class="small muted" style="margin:10px 4px 0">Что нового в 2.2: поиск продуктов через новый поисковик Open Food Facts.</p></div>`;
+   <p class="small muted" style="margin:10px 4px 0">Что нового в 2.3: проверка связи с базой продуктов.</p></div>`;
   h+=`<p class="center small muted">Ритм ${APP_VERSION} · данные хранятся только на этом телефоне</p>`;
   return h;
 }
@@ -791,6 +793,33 @@ async function shareBackup(){
   } else { const a=document.createElement('a'); a.href=URL.createObjectURL(file); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000); done(); }
 }
 
+async function runDiag(){
+  const sh=openSheet(`<h1>Проверка связи</h1><pre id="dg" class="small" style="white-space:pre-wrap;word-break:break-all;background:var(--card);border-radius:14px;padding:12px;margin:0 0 12px;font-family:ui-monospace,Menlo,monospace">Проверяю, это займёт до минуты…</pre><button class="btn wide" data-act="diagcopy">Скопировать результат</button>`);
+  const out=[`Ритм ${APP_VERSION} · ${new Date().toLocaleString('ru-RU')}`, `онлайн: ${navigator.onLine} · ${navigator.userAgent.replace(/^Mozilla\/5\.0 /,'')}`, `страница: ${location.origin}`];
+  const pre=sh.querySelector('#dg'), show=()=>{ pre.textContent=out.join('\n'); };
+  const tests=[
+    ['1. Интернет (страница приложения)', 'index.html?diag='+Date.now(), false],
+    ['2. Новый поиск', 'https://search.openfoodfacts.org/search?q=lavash&page_size=3&fields=code,product_name,nutriments', true],
+    ['3. Старый поиск', 'https://world.openfoodfacts.org/cgi/search.pl?search_terms=lavash&search_simple=1&action=process&json=1&page_size=3&fields=code,product_name', true],
+    ['4. Штрихкод (API продукта)', 'https://world.openfoodfacts.org/api/v2/product/3017620422003.json?fields=code,product_name', true],
+    ['5. Сайт базы без CORS', 'https://world.openfoodfacts.org/', 'nocors'],
+  ];
+  for(const [name,url,json] of tests){
+    out.push(''); out.push(name+' …'); show();
+    const t0=performance.now();
+    try{
+      const opt=json==='nocors'?{mode:'no-cors',cache:'no-store'}:{cache:'no-store'};
+      const c=new AbortController(), tm=setTimeout(()=>c.abort(),20000);
+      const r=await fetch(url,{...opt,signal:c.signal}); clearTimeout(tm);
+      let info=json==='nocors'?`ответ получен (${r.type})`:`HTTP ${r.status}`;
+      if(json===true){ const txt=await r.text(); try{ const j=JSON.parse(txt); const n=(j.hits||j.products||[]).length; info+=j.product?` · найден: ${j.product.product_name||'?'}`:` · результатов: ${n}`; }catch(e){ info+=' · не JSON: '+txt.slice(0,80).replace(/\s+/g,' '); } }
+      out[out.length-1]=name+': ✅ '+info+` · ${Math.round(performance.now()-t0)} мс`;
+    }catch(e){ out[out.length-1]=name+`: ❌ ${e.name}: ${e.message} · ${Math.round(performance.now()-t0)} мс`; }
+    show();
+  }
+  if(diagLog.length){ out.push('','Ошибки поиска в этой сессии:'); out.push(...diagLog); }
+  out.push('','Готово.'); show(); sh._text=out.join('\n');
+}
 async function checkUpdate(){
   if(!navigator.onLine){ toast('Нет интернета'); return; }
   toast('Проверяю…');
@@ -888,7 +917,8 @@ document.addEventListener('click',e=>{
     goplan(){ tab='more'; render(); setTimeout(()=>$('#plancard')?.scrollIntoView({behavior:'smooth',block:'start'}),50); },
     slotadd(){ S.plan.slots.push({id:uid(),wd:wdOf(today()),type:S.workoutTypes[0]||'Тренировка',time:'19:00',minutes:60}); save(); render(); },
     slotdel(){ S.plan.slots.splice(+d.i,1); save(); render(); },
-    ics: exportIcs, checkupd: checkUpdate,
+    ics: exportIcs, checkupd: checkUpdate, diag: runDiag,
+    async diagcopy(){ const t=sheetEl._text||sheetEl.querySelector('#dg').textContent; try{ await navigator.clipboard.writeText(t); toast('Скопировано — вставьте в чат'); }catch(e){ const r=document.createRange(); r.selectNodeContents(sheetEl.querySelector('#dg')); const s=getSelection(); s.removeAllRanges(); s.addRange(r); toast('Выделено — нажмите «Скопировать»'); } },
     smon(){ const [y,m]=statMonth.split('-').map(Number); statMonth=iso(new Date(y,m-1+(+d.n),1)).slice(0,7); render(); },
     mode(){ S.settings.mode=d.k; save(false); render(); },
     export(){ shareBackup(); }
